@@ -1,0 +1,7 @@
+/pad-lab2
+results.xlsx
+results.tmp.xlsx
+lab2.log
+~$*.xlsx
+.~lock.*#
+.DS_Store
