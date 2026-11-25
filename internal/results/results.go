@@ -54,7 +54,7 @@ func (j *Journal) Path() string { return j.path }
 func (j *Journal) lockMarkers() []string {
 	dir, base := filepath.Dir(j.path), filepath.Base(j.path)
 	return []string{
-		filepath.Join(dir, "~$"+base),         // Microsoft Excel
+		filepath.Join(dir, "~$"+base),          // Microsoft Excel
 		filepath.Join(dir, ".~lock."+base+"#"), // LibreOffice / ONLYOFFICE
 	}
 }

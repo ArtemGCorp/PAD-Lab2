@@ -18,7 +18,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"pad-lab2/internal/assign"
@@ -28,12 +28,15 @@ import (
 )
 
 type ui struct {
-	app     fyne.App
-	win     fyne.Window
-	group   *widget.Select
-	student *widget.Select
-	btn     *widget.Button
-	status  *widget.Label
+	app        fyne.App
+	win        fyne.Window
+	group      *widget.Select
+	student    *widget.Select
+	btn        *widget.Button
+	reload     *widget.Button
+	status     *widget.Label
+	statusIcon *widget.Icon
+	stats      *widget.Label
 
 	studentsPath string
 	ticketsPath  string
@@ -41,6 +44,9 @@ type ui struct {
 
 	roster  *students.Roster
 	tickets []tickets.Ticket
+
+	// last is the most recently opened result window (used by tests).
+	last *resultView
 }
 
 func main() {
@@ -56,6 +62,7 @@ func main() {
 	}
 
 	a := app.NewWithID("md.pad.lab2")
+	a.Settings().SetTheme(appTheme{})
 	u := newUI(a, *studentsPath, *ticketsPath, *resultsPath)
 	u.win.Show()
 	u.load()
@@ -75,34 +82,45 @@ func newUI(a fyne.App, studentsPath, ticketsPath, resultsPath string) *ui {
 }
 
 func (u *ui) build() {
-	u.status = widget.NewLabel("")
-	u.status.Wrapping = fyne.TextWrapWord
-
 	u.student = widget.NewSelect(nil, func(string) { u.refreshButton() })
-	u.student.PlaceHolder = "Выберите студента"
+	u.student.PlaceHolder = "Сначала выберите группу"
 
 	u.group = widget.NewSelect(nil, u.onGroup)
 	u.group.PlaceHolder = "Выберите группу"
 
-	u.btn = widget.NewButton("Сгенерировать билет", u.onGenerate)
+	u.btn = widget.NewButtonWithIcon("Сгенерировать билет", theme.DocumentCreateIcon(), u.onGenerate)
 	u.btn.Importance = widget.HighImportance
 	u.btn.Disable()
 
-	reload := widget.NewButton("Перечитать файлы", u.load)
+	u.reload = widget.NewButtonWithIcon("Перечитать файлы", theme.ViewRefreshIcon(), u.load)
+	u.reload.Importance = widget.LowImportance
 
-	form := widget.NewForm(
-		widget.NewFormItem("Группа", u.group),
-		widget.NewFormItem("Студент", u.student),
-	)
-	u.win.SetContent(container.NewPadded(container.NewVBox(
-		widget.NewLabelWithStyle("Экзамен: выдача билетов", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		form,
+	u.stats = widget.NewLabel("")
+	u.stats.TextStyle = fyne.TextStyle{Bold: true}
+	u.statusIcon = widget.NewIcon(theme.InfoIcon())
+	u.status = widget.NewLabel("")
+	u.status.Wrapping = fyne.TextWrapWord
+
+	selection := card(container.NewVBox(
+		fieldLabel("Группа"), u.group,
+		fieldLabel("Студент"), u.student,
+		widget.NewSeparator(),
 		u.btn,
-		layout.NewSpacer(),
-		container.NewHBox(reload),
+	))
+
+	footer := card(container.NewVBox(
+		container.NewBorder(nil, nil, u.statusIcon, u.reload, u.stats),
 		u.status,
-	)))
-	u.win.Resize(fyne.NewSize(520, 320))
+	))
+
+	u.win.SetContent(container.NewBorder(
+		header(theme.AccountIcon(), "Выдача экзаменационных билетов",
+			"Выберите группу и студента, затем нажмите «Сгенерировать билет»"),
+		container.NewPadded(footer),
+		nil, nil,
+		container.NewPadded(selection),
+	))
+	u.win.Resize(fyne.NewSize(560, 560))
 	u.win.SetMaster()
 }
 
@@ -146,24 +164,37 @@ func (u *ui) load() {
 		u.group.Refresh()
 	}
 
-	info := fmt.Sprintf("Групп: %d · Билетов: %d", len(u.group.Options), len(u.tickets))
+	u.stats.SetText(fmt.Sprintf("Групп: %d · Билетов: %d", len(u.group.Options), len(u.tickets)))
 	if len(problems) > 0 {
 		for _, p := range problems {
 			log.Print(p)
 		}
-		u.status.SetText(info + "\n" + strings.Join(problems, "\n"))
+		u.status.SetText(strings.Join(problems, "\n"))
+		u.status.Importance = widget.WarningImportance
+		u.statusIcon.SetResource(theme.WarningIcon())
 		if u.roster == nil || u.tickets == nil {
 			dialog.ShowError(errors.New(strings.Join(problems, "\n")), u.win)
 		}
 	} else {
-		u.status.SetText(info)
+		u.status.SetText("Файлы загружены, можно выдавать билеты.")
+		u.status.Importance = widget.SuccessImportance
+		u.statusIcon.SetResource(theme.ConfirmIcon())
 	}
+	u.status.Refresh()
 	u.refreshButton()
 }
 
 func (u *ui) onGroup(g string) {
 	u.student.ClearSelected()
 	u.student.Options = nil
+	switch {
+	case g == "":
+		u.student.PlaceHolder = "Сначала выберите группу"
+	case u.roster != nil && len(u.roster.Students(g)) == 0:
+		u.student.PlaceHolder = "В группе нет студентов"
+	default:
+		u.student.PlaceHolder = "Выберите студента"
+	}
 	if u.roster != nil && g != "" {
 		for _, s := range u.roster.Students(g) {
 			u.student.Options = append(u.student.Options, s.Display())
@@ -235,47 +266,18 @@ func (u *ui) tryGenerate(group string, s students.Student) {
 		dialog.ShowError(err, u.win)
 		return
 	}
-	u.showResult(s, d)
+	u.last = u.showResult(group, s, d)
 }
 
-func (u *ui) showResult(s students.Student, d assign.Decision) {
-	w := u.app.NewWindow(fmt.Sprintf("Билет № %d", d.Ticket.Number))
-
-	title := widget.NewLabelWithStyle(fmt.Sprintf("Ваш билет № %d", d.Ticket.Number),
-		fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-	box := container.NewVBox(
-		widget.NewLabelWithStyle(s.Display(), fyne.TextAlignCenter, fyne.TextStyle{Italic: true}),
-		title,
-		widget.NewSeparator(),
-	)
-	if len(d.Ticket.Questions) == 0 {
-		box.Add(widget.NewLabel("Вопросы этого билета не найдены в tickets.docx."))
-	}
-	for i, q := range d.Ticket.Questions {
-		l := widget.NewLabel(fmt.Sprintf("%d. %s", i+1, q))
-		l.Wrapping = fyne.TextWrapWord
-		box.Add(l)
-	}
-	if d.Repeat {
-		box.Add(widget.NewLabelWithStyle("Повторный запрос: выдан тот же билет, что и в первый раз.",
-			fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
-	}
-	box.Add(layout.NewSpacer())
-	box.Add(widget.NewLabelWithStyle("Нажмите ESC, чтобы закрыть", fyne.TextAlignCenter, fyne.TextStyle{}))
-
-	w.SetContent(container.NewPadded(box))
-	w.Canvas().SetOnTypedKey(func(k *fyne.KeyEvent) {
-		if k.Name == fyne.KeyEscape {
-			w.Close()
-		}
-	})
-	w.SetOnClosed(func() {
+func (u *ui) showResult(group string, s students.Student, d assign.Decision) *resultView {
+	rv := newResultView(u.app, group, s, d)
+	rv.win.SetOnClosed(func() {
 		u.student.ClearSelected()
 		u.refreshButton()
 		u.win.RequestFocus()
 	})
-	w.Resize(fyne.NewSize(480, 300))
-	w.CenterOnScreen()
-	w.Show()
-	w.RequestFocus()
+	rv.win.CenterOnScreen()
+	rv.win.Show()
+	rv.win.RequestFocus()
+	return rv
 }
